@@ -1,49 +1,121 @@
+#include <ctype.h>
 #include <string.h>
 #include "vibrant_logs.h"
 #include "dynamic_map_spellbook.h"
 #include "snaky_script.h"
 
-static int parse_target_arg(const char *args_start, char *buffer, size_t buffer_size, const char *arg_name, size_t arg_len, const char **start_pos)
-{
-	// go to where the '=' should be
-	const char *equals = args_start + arg_len;
+#define STRING_DELIM '"'
 
-	if(*equals != '=')
+static int parse_target_arg(const char *args_start, char *buffer, size_t buffer_size, const char *arg_name, size_t arg_len, const char **out_start_pos, snaky_data_type *out_data_type)
+{
+	while(*args_start && *args_start != '=')
+	{
+		// while searching for the '=' try to also find the ':DATA_TYPE' string
+		if(*args_start == ':')
+		{
+			// skip the ':'
+			args_start++;
+
+			// skip all whitespace after the ':'
+			while(*args_start && *args_start == ' ')
+				args_start++;
+
+			// now find which data type the user provided
+			if(strncmp(args_start, "char", 4) == 0)
+			{
+				if(out_data_type)
+					*out_data_type = SNAKY_CHAR;
+				args_start += 4;
+			}
+			else if(strncmp(args_start, "bool", 4) == 0)
+			{
+				if(out_data_type)
+					*out_data_type = SNAKY_BOOL;
+				args_start += 4;
+			}
+			else if(strncmp(args_start, "int", 3) == 0)
+			{
+				if(out_data_type)
+					*out_data_type = SNAKY_INT;
+				args_start += 3;
+			}
+			else if(strncmp(args_start, "float", 5) == 0)
+			{
+				if(out_data_type)
+					*out_data_type = SNAKY_FLOAT;
+				args_start += 5;
+			}
+			else if(strncmp(args_start, "double", 6) == 0)
+			{
+				if(out_data_type)
+					*out_data_type = SNAKY_DOUBLE;
+				args_start += 6;
+			}
+			else
+			{
+				vl_log(VL_ERROR, "Unknown data type: '%s'!\n", args_start);
+				return 0;
+			}
+			continue;
+		}
+
+		args_start++;
+	}
+
+	if(!*args_start)
 	{
 		vl_log(VL_ERROR, "Expected '=' after argument: '%s'!\n", arg_name);
 		return 0;
 	}
 
 	// go to the character after the '='
-	equals++;
+	args_start++;
+
+	// skip all whitespace:
+	while(*args_start && *args_start == ' ')
+	{
+		args_start++;
+	}
+
+	if(!*args_start)
+	{
+		vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(args_start - 1));
+		return 0;
+	}
+
+	// if the start of the argument is an opening of another argument string, error out
+	if(*args_start == '<')
+	{
+		vl_log(VL_ERROR, "Nested argument strings must be wrapped around opening and closing '\"'!\n");
+		return 0;
+	}
 
 	// if start pos queried, return it
-	if(start_pos)
-		*start_pos = equals;
+	if(out_start_pos)
+		*out_start_pos = args_start;
 
-	// determine if this is a nested argument
-	if(*equals == '<')
+	// see if the arg value is a string
+	bool in_string = *args_start == STRING_DELIM;
+
+	// determine if a nested argument or string is given
+	if(in_string)
 	{
-		// put the entire nested argument into the buffer
+		const char *start_of_str = args_start;
+
+		// skip the string delimiter
+		args_start++;
+
+		// copy everything in the string exactly as is
 		size_t i = 0;
-		while(*equals && *equals != '>' && i + 1 < buffer_size)
-			buffer[i++] = *equals++;
+		while(*args_start && *args_start != STRING_DELIM && i + 1 < buffer_size)
+			buffer[i++] = *args_start++;
 
-		// ensure the argument string ended properly
-		if(*equals != '>')
+		if(!*args_start)
 		{
-			vl_log(VL_ERROR, "Expected '>' in nested argument string: '%s'!\n", args_start);
+			vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_str);
 			return 0;
 		}
 
-		// copy the closing '>' and '\0'
-		if(i + 1 >= buffer_size)
-		{
-			vl_log(VL_ERROR, "The given buffer is not large enough (size=%zu) to fit the argument value of '%s'!\n", buffer_size, arg_name);
-			return 0;
-		}
-
-		buffer[i++] = *equals++;
 		buffer[i] = '\0';
 
 		return 1;
@@ -51,14 +123,14 @@ static int parse_target_arg(const char *args_start, char *buffer, size_t buffer_
 
 	// if not a nested string, copy the arg value normally
 	size_t i = 0;
-	while(*equals && *equals != '>' && *equals != ',' && i + 1 < buffer_size)
-		buffer[i++] = *equals++;
+	while(*args_start && *args_start != '>' && *args_start != ',' && i + 1 < buffer_size)
+		buffer[i++] = *args_start++;
 
 	buffer[i] = '\0';
 
 	return 1;
 }
-int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, const char *arg_name, const char **start_pos)
+int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, const char *arg_name, const char **out_start_pos, snaky_data_type *out_data_type)
 {
 	size_t arg_len = arg_name ? strlen(arg_name) : 0;
 
@@ -67,10 +139,77 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 
 	bool in_top_most_level = false;
 
+	// see if user is trying to find a nested argument:
+
+	// the resolved arg name is the final argument name after the last '.' character in the original argument name string
+	const char *resolved_arg_name = arg_name;
+	size_t resolved_arg_len = arg_len;
+	size_t last_nested_arg_pos = 0;
+	int i = 0;
+	for(const char *p = arg_name; *p; ++p)
+	{
+		if(*p == '.')
+			last_nested_arg_pos = i;
+		i++;
+	}
+
+	resolved_arg_name = arg_name + last_nested_arg_pos + 1;
+	if(!*resolved_arg_name)
+	{
+		vl_log(VL_ERROR, "Unexpected termination of argument name: '%s'!\n", arg_name);
+		return 0;
+	}
+	resolved_arg_len = strlen(resolved_arg_name);
+
+	// see if resolved arg name is invalid (starts with number of symbol)
+	if(!isalpha(*resolved_arg_name))
+	{
+		vl_log(VL_ERROR, "Argument name cannot start with a symbol or number: '%s'!\n", resolved_arg_name);
+		return 0;
+	}
+
 	for(const char *p = str; *p && *p != '>'; ++p)
 	{
 		// get char
 		char c = *p;
+
+		// if the first char is a string delimiter, skip the string entirely (unless user is searching for nested argument)
+		if(c == STRING_DELIM)
+		{
+			const char *start_of_str = p;
+
+			// skip the first string delimiter
+			p++;
+
+			while(*p && *p != STRING_DELIM)
+			{
+				if(resolved_arg_len > 0)
+				{
+					const char *args_start = p + 1;
+
+					while(*args_start && *args_start == ' ')
+						args_start++;
+
+					if(!*args_start)
+					{
+						vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(args_start - 1));
+						return 0;
+					}
+
+					if(strncmp(args_start, resolved_arg_name, resolved_arg_len) == 0)
+						return parse_target_arg(args_start, buffer, buffer_size, resolved_arg_name, resolved_arg_len, out_start_pos, out_data_type);
+				}
+				++p;
+			}
+
+			if(!*p)
+			{
+				vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_str);
+				return 0;
+			}
+
+			continue;
+		}
 
 		// when the first '<' or ',' is encountered, compare arg to the target arg
 		if(c == '<' && !in_top_most_level)
@@ -81,8 +220,17 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 			// compare the argument with the target argument
 			const char *args_start = p + 1;
 
+			while(*args_start && *args_start == ' ')
+				args_start++;
+
+			if(!*args_start)
+			{
+				vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(args_start - 1));
+				return 0;
+			}
+
 			if(strncmp(args_start, arg_name, arg_len) == 0)
-				return parse_target_arg(args_start, buffer, buffer_size, arg_name, arg_len, start_pos);
+				return parse_target_arg(args_start, buffer, buffer_size, arg_name, arg_len, out_start_pos, out_data_type);
 
 			continue;
 		}
@@ -93,8 +241,18 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 			// same logic as above
 			const char *args_start = p + 1;
 
+			// skip whitespace
+			while(*args_start && *args_start == ' ')
+				args_start++;
+
+			if(!*args_start)
+			{
+				vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(args_start - 1));
+				return 0;
+			}
+
 			if(strncmp(args_start, arg_name, arg_len) == 0)
-				return parse_target_arg(args_start, buffer, buffer_size, arg_name, arg_len, start_pos);
+				return parse_target_arg(args_start, buffer, buffer_size, arg_name, arg_len, out_start_pos, out_data_type);
 
 			continue;
 		}
@@ -102,8 +260,17 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 		// if a nested argument string is found, skip it
 		if(c == '<' && in_top_most_level)
 		{
-			while(*p && *p != '>')
+			/*while(*p && *p != '>')
 				++p;
+
+			if(!*p)
+			{
+				vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(p - 1));
+				return 0;
+			}
+
+			// skip the '>'
+			p++;
 
 			if(!*p)
 			{
@@ -111,38 +278,96 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 				return 0;
 			}
 
-			continue;
+			continue;*/
+
+			vl_log(VL_ERROR, "Nested arguments must be wrapped in opening and closing '\"'\n");
+			return 0;
 		}
 	}
 
 	return 0;
 }
-static int parse_arg(const char *args_start, char *name_buffer, size_t name_buffer_size, char *value_buffer, size_t value_buffer_size, const char **start_pos)
+static int parse_arg(const char *args_start, char *name_buffer, size_t name_buffer_size, char *value_buffer, size_t value_buffer_size, const char **out_start_pos)
 {
 	// 'args_start' points to the first char in the arg name
 	size_t i = 0;
-	while(i + 1 < name_buffer_size && *args_start != '=')
+	while(*args_start && *args_start != ' ' && *args_start != '=' && i + 1 < name_buffer_size)
 		name_buffer[i++] = *args_start++;
 
 	name_buffer[i] = '\0';
 
-	// now args_start should be at the '=,' skip it
+	// find the '=' for this arg name
+	while(*args_start && *args_start != '=')
+		args_start++;
+
+	// was a '=' ever found?
+	if(!*args_start)
+	{
+		vl_log(VL_ERROR, "Expected '=' after argument: '%s'!\n", name_buffer);
+		return 0;
+	}
+
+	// if the start of the argument is an opening of another argument string, error out
+	if(*args_start == '<')
+	{
+		vl_log(VL_ERROR, "Nested argument strings must be wrapped around opening and closing '\"'!\n");
+		return 0;
+	}
+
+	// if '=' was found, skip it
 	args_start++;
 
-	// if user queried arg start pos, return it
-	if(start_pos)
-		*start_pos = args_start;
+	// skip all whitespace:
+	while(*args_start && *args_start == ' ')
+		args_start++;
 
-	// now args_start points to the first char in the arg value
+	if(!*args_start)
+	{
+		vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(args_start - 1));
+		return 0;
+	}
+
+	// if user queried arg start pos, return it
+	if(out_start_pos)
+		*out_start_pos = args_start;
+
+	// see if the arg value is a string
+	bool in_string = *args_start == STRING_DELIM;
+
+	// if inside a string, keep adding values until the matching string delimiter is found
+	if(in_string)
+	{
+		const char *start_of_str = args_start;
+
+		// skip the string delimiter
+		args_start++;
+
+		// copy everything in the string exactly as is
+		i = 0;
+		while(*args_start && *args_start != STRING_DELIM && i + 1 < value_buffer_size)
+			value_buffer[i++] = *args_start++;
+
+		if(!*args_start)
+		{
+			vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_str);
+			return 0;
+		}
+
+		value_buffer[i] = '\0';
+
+		return 1;
+	}
+
+	// if not a nested string, copy the arg value normally
 	i = 0;
-	while(i + 1 < value_buffer_size && *args_start != '>' && *args_start != ',')
+	while(*args_start && *args_start != '>' && *args_start != ',' && i + 1 < value_buffer_size)
 		value_buffer[i++] = *args_start++;
 
 	value_buffer[i] = '\0';
 
 	return 1;
 }
-int snaky_parse_arg(const char *str, char *name_buffer, size_t name_buffer_size, char *value_buffer, size_t value_buffer_size, const char **start_pos)
+int snaky_parse_arg(const char *str, char *name_buffer, size_t name_buffer_size, char *value_buffer, size_t value_buffer_size, const char **out_start_pos)
 {
 	if(!str || strlen(str) == 0 || !name_buffer || name_buffer_size == 0 || !value_buffer || value_buffer_size == 0)
 		return 0;
@@ -154,17 +379,61 @@ int snaky_parse_arg(const char *str, char *name_buffer, size_t name_buffer_size,
 		// get char
 		char c = *p;
 
+		// if the first char is a string delimiter, skip the string entirely
+		if(c == STRING_DELIM)
+		{
+			const char *start_of_str = p;
+
+			// skip the first string delimiter
+			p++;
+
+			while(*p && *p != STRING_DELIM)
+				++p;
+
+			if(!*p)
+			{
+				vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_str);
+				return 0;
+			}
+
+			continue;
+		}
+
 		// when the first '<' or ',' is encountered, see what the very next arg is
 		if((c == '<' || c == ',') && !in_top_most_level)
 		{
 			in_top_most_level = true;
 
-			return parse_arg(p + 1, name_buffer, name_buffer_size, value_buffer, value_buffer_size, start_pos);
+			const char *args_start = p + 1;
+
+			while(*args_start && *args_start == ' ')
+				args_start++;
+
+			if(!*args_start)
+			{
+				vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(args_start - 1));
+				return 0;
+			}
+
+			return parse_arg(args_start, name_buffer, name_buffer_size, value_buffer, value_buffer_size, out_start_pos);
 		}
 
 		// parse the very next arg found
 		if(c == ',' && in_top_most_level)
-			return parse_arg(p + 1, name_buffer, name_buffer_size, value_buffer, value_buffer_size, start_pos);
+		{
+			const char *args_start = p + 1;
+
+			while(*args_start && *args_start == ' ')
+				args_start++;
+
+			if(*args_start)
+			{
+				vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(args_start - 1));
+				return 0;
+			}
+
+			return parse_arg(args_start, name_buffer, name_buffer_size, value_buffer, value_buffer_size, out_start_pos);
+		}
 
 		// nested arguments are skipped
 		if(c == '<' && in_top_most_level)
@@ -185,35 +454,6 @@ int snaky_parse_arg(const char *str, char *name_buffer, size_t name_buffer_size,
 	return 0;
 }
 
-bool snaky_parse_bool(const char *str, int *out_success)
-{
-	if(!str || strlen(str) == 0)
-	{
-		if(out_success)
-			*out_success = false;
-		return false;
-	}
-	
-	if(strcmp(str, "TRUE") == 0)
-	{
-		if(out_success)
-			*out_success = true;
-		return true;
-	}
-	else if(strcmp(str, "FALSE") == 0)
-	{
-		if(out_success)
-			*out_success = true;
-		return false;
-	}
-	else
-	{
-		if(out_success)
-			*out_success = false;
-		return false;
-	}
-}
-
 int snaky_remove_arg(char *str, const char *arg_name)
 {
 	size_t arg_name_len = arg_name ? strlen(arg_name) : 0;
@@ -224,7 +464,7 @@ int snaky_remove_arg(char *str, const char *arg_name)
 	// see if the arg is found
 	const char *start_pos = NULL;
 	char arg_value[SNAKY_BUF_SIZE + 1];
-	if(!snaky_parse_target_arg(str, arg_value, sizeof(arg_value), arg_name, &start_pos))
+	if(!snaky_parse_target_arg(str, arg_value, sizeof(arg_value), arg_name, &start_pos, NULL))
 	{
 		vl_log(VL_ERROR, "The '%s' argument was not found in this string: '%s'!\n", arg_name, str);
 		return 0;
@@ -263,7 +503,7 @@ int snaky_add_arg(char *str, size_t buffer_size, const char *arg_name, const cha
 
 	// see if the arg is already present in the string
 	char arg_value[SNAKY_BUF_SIZE + 1];
-	if(snaky_parse_target_arg(str, arg_value, sizeof(arg_value), arg_name, NULL))
+	if(snaky_parse_target_arg(str, arg_value, sizeof(arg_value), arg_name, NULL, NULL))
 		// if so, just edit the argument value in the string
 		return snaky_set_arg(str, buffer_size, arg_name, new_arg_value);
 
@@ -359,7 +599,7 @@ int snaky_set_arg(char *str, size_t buffer_size, const char *arg_name, const cha
 	char arg_value[SNAKY_BUF_SIZE + 1];
 	for(const char *t = p; *t; ++t)
 	{
-		if(snaky_parse_target_arg(t, arg_value, sizeof(arg_value), arg_name, &start_pos))
+		if(snaky_parse_target_arg(t, arg_value, sizeof(arg_value), arg_name, &start_pos, NULL))
 		{
 			edit_pos = (char*) start_pos;
 			curr_len = strlen(arg_value);
@@ -469,11 +709,196 @@ int snaky_get_arg_data(const char *str, snaky_arg_data *data)
 
 	while(snaky_parse_arg(start_pos, name, sizeof(name), value, sizeof(value), &start_pos))
 	{
-		vl_log(VL_DEBUG, "parsed name and value: '%s'='%s'!\n", name, value);
 		dynmaps_set_strkeyval(data, name, value);
 		if(data->alloc_failure)
 			return 0;
 	}
 
 	return 1;
+}
+
+char snaky_parse_char(const char *str, int *out_success)
+{
+	if(!str || strlen(str) != 1)
+	{
+		if(out_success)
+			*out_success = 0;
+		return '\0';
+	}
+
+	char c = *str;
+
+	if(out_success)
+		*out_success = 1;
+
+	return c;
+}
+bool snaky_parse_bool(const char *str, int *out_success)
+{
+	if(!str || strlen(str) == 0)
+	{
+		if(out_success)
+			*out_success = 0;
+		return false;
+	}
+
+	if(strcmp(str, "TRUE") == 0)
+	{
+		if(out_success)
+			*out_success = 1;
+		return true;
+	}
+	else if(strcmp(str, "FALSE") == 0)
+	{
+		if(out_success)
+			*out_success = 1;
+		return false;
+	}
+	else
+	{
+		if(out_success)
+			*out_success = 0;
+		return false;
+	}
+}
+int snaky_parse_int(const char *str, int *out_success)
+{
+	if(!str || strlen(str) == 0)
+	{
+		if(out_success)
+			*out_success = 0;
+		return 0;
+	}
+
+	char *endptr = NULL;
+	int i = strtol(str, &endptr, 10);
+	if(endptr != str)
+	{
+		if(out_success)
+			*out_success = 1;
+		return i;
+	}
+
+	if(out_success)
+		*out_success = 0;
+	return 0;
+}
+float snaky_parse_float(const char *str, int *out_success)
+{
+	if(!str || strlen(str) == 0)
+	{
+		if(out_success)
+			*out_success = 0;
+		return 0.0f;
+	}
+
+	char *endptr = NULL;
+	float f = strtof(str, &endptr);
+	if(endptr != str)
+	{
+		if(out_success)
+			*out_success = 1;
+		return f;
+	}
+
+	if(out_success)
+		*out_success = 0;
+	return 0.0f;
+}
+double snaky_parse_double(const char *str, int *out_success)
+{
+	if(!str || strlen(str) == 0)
+	{
+		if(out_success)
+			*out_success = 0;
+		return 0.0;
+	}
+
+	char *endptr = NULL;
+	double d = strtod(str, &endptr);
+	if(endptr != str)
+	{
+		if(out_success)
+			*out_success = 1;
+		return d;
+	}
+
+	if(out_success)
+		*out_success = 0;
+	return 0.0;
+}
+void snaky_parse_value(const char *str, snaky_data_type target_type, void *out_value, int *out_success)
+{
+	if(!out_success)
+	{
+		vl_log(VL_ERROR, "snaky_parse_value(...) requires 'out_success' to be a valid pointer!\n");
+		return;
+	}
+
+	// make sure it's 0 by default
+	*out_success = 0;
+
+	/*
+	   evaluate any expressions:
+
+	   for example, the expression 3 + 5 should result in 8 being parsed instead
+
+	   first step in parsing is to tokenize (split string into parts)
+	*/
+
+	// TODO
+
+	switch(target_type)
+	{
+		case SNAKY_CHAR:
+			char c = snaky_parse_char(str, out_success);
+			if(*out_success == 1 && out_value)
+				*((char*) out_value) = c;
+			break;
+		case SNAKY_BOOL:
+			bool b = snaky_parse_bool(str, out_success);
+			if(*out_success == 1 && out_value)
+				*((bool*) out_value) = b;
+			break;
+		case SNAKY_INT:
+			int i = snaky_parse_int(str, out_success);
+			if(*out_success == 1 && out_value)
+				*((int*) out_value) = i;
+			break;
+		case SNAKY_FLOAT:
+			float f = snaky_parse_float(str, out_success);
+			if(*out_success == 1 && out_value)
+				*((float*) out_value) = f;
+			break;
+		case SNAKY_DOUBLE:
+			double d = snaky_parse_double(str, out_success);
+			if(*out_success == 1 && out_value)
+				*((double*) out_value) = d;
+			break;
+		default:
+			vl_log(VL_ERROR, "Invalid data type in snaky_parse_value(...): %d\n", target_type);
+			break;
+	}
+
+	if(*out_success == 0)
+		vl_log(VL_ERROR, "Failed to parse target string: '%s'!\n", str);
+}
+void snaky_parse_target_arg_value(const char *str, const char *arg_name, snaky_data_type target_type, void *out_value, const char **out_start_pos, int *out_success)
+{
+	if(!out_success)
+	{
+		vl_log(VL_ERROR, "snaky_parse_value(...) requires 'out_success' to be a valid pointer!\n");
+		return;
+	}
+
+	// make sure it is 0 by default
+	*out_success = 0;
+
+	char arg[SNAKY_BUF_SIZE];
+	snaky_data_type resolved_type = SNAKY_INVALID_VALUE;
+	if(snaky_parse_target_arg(str, arg, sizeof(arg), arg_name, out_start_pos, &resolved_type))
+		snaky_parse_value(arg, resolved_type, out_value, out_success);
+
+	if(*out_success == 0)
+		vl_log(VL_ERROR, "Failed to parse target arg value: string: '%s', argument name: '%s'!\n", str, arg_name);
 }
