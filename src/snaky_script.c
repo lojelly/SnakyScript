@@ -153,7 +153,7 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 		i++;
 	}
 
-	resolved_arg_name = arg_name + last_nested_arg_pos + 1;
+	resolved_arg_name = last_nested_arg_pos > 0 ? arg_name + last_nested_arg_pos + 1 : arg_name;
 	if(!*resolved_arg_name)
 	{
 		vl_log(VL_ERROR, "Unexpected termination of argument name: '%s'!\n", arg_name);
@@ -587,9 +587,6 @@ int snaky_set_arg(char *str, size_t buffer_size, const char *arg_name, const cha
 	if(!str || strlen(str) == 0 || strlen(str) >= buffer_size || buffer_size == 0 || !arg_name || strlen(arg_name) == 0 || !new_arg_value || strlen(new_arg_value) == 0)
 		return 0;
 
-	// find the arg in the string:
-	char *p = str;
-
 	char *edit_pos = NULL;
 	size_t edit_len = 0;
 	int curr_len = -1;
@@ -597,15 +594,11 @@ int snaky_set_arg(char *str, size_t buffer_size, const char *arg_name, const cha
 	const char *start_pos = NULL;
 
 	char arg_value[SNAKY_BUF_SIZE + 1];
-	for(const char *t = p; *t; ++t)
+	if(snaky_parse_target_arg(str, arg_value, sizeof(arg_value), arg_name, &start_pos, NULL))
 	{
-		if(snaky_parse_target_arg(t, arg_value, sizeof(arg_value), arg_name, &start_pos, NULL))
-		{
-			edit_pos = (char*) start_pos;
-			curr_len = strlen(arg_value);
-			arg_found = true;
-			break;
-		}
+		edit_pos = (char*) start_pos;
+		curr_len = strlen(arg_value);
+		arg_found = true;
 	}
 
 	// see if current value is a bool and user passed "OPPOSITE"
@@ -670,6 +663,33 @@ int snaky_set_arg(char *str, size_t buffer_size, const char *arg_name, const cha
 	}
 
 	return 1;
+}
+int snaky_set_args(char *str, size_t buffer_size, const char *args)
+{
+	if(!str || strlen(str) == 0 || strlen(str) >= buffer_size || buffer_size == 0 || !args || strlen(args) == 0)
+		return 0;
+
+	// because 'args' should be its own argument string, get the arg data from it
+	snaky_arg_data args_data = {0};
+	if(snaky_get_arg_data(args, &args_data))
+	{
+		// go through the map
+		for(size_t i = 0; i < args_data.size; ++i)
+		{
+			// get the arg name and new value
+			const char *name = args_data.keys[i];
+			const char *val = args_data.values[i];
+
+			// set it
+			if(!snaky_set_arg(str, buffer_size, name, val))
+				return 0;
+		}
+
+		dynmaps_free_strkeyval(&args_data);
+		return 1;
+	}
+
+	return 0;
 }
 
 size_t snaky_count_args(const char *str)
@@ -894,11 +914,96 @@ void snaky_parse_target_arg_value(const char *str, const char *arg_name, snaky_d
 	// make sure it is 0 by default
 	*out_success = 0;
 
-	char arg[SNAKY_BUF_SIZE];
+	char arg[SNAKY_BUF_SIZE + 1];
 	snaky_data_type resolved_type = SNAKY_INVALID_VALUE;
 	if(snaky_parse_target_arg(str, arg, sizeof(arg), arg_name, out_start_pos, &resolved_type))
 		snaky_parse_value(arg, resolved_type, out_value, out_success);
 
 	if(*out_success == 0)
 		vl_log(VL_ERROR, "Failed to parse target arg value: string: '%s', argument name: '%s'!\n", str, arg_name);
+}
+
+// storage of object templates:
+typedef struct obj_template
+{
+	char str[512];
+	char name[64];
+	size_t size;
+} obj_template;
+typedef struct obj_template_map
+{
+	char **keys;
+	obj_template *values;
+	size_t size, capacity;
+	bool alloc_failure;
+} obj_template_map;
+
+static obj_template_map obj_templates = {0};
+
+int snaky_create_object_template(const char *name, const char *str, size_t size)
+{
+	// see if the map needs to be initialized
+	if(obj_templates.size == 0)
+	{
+		dynmaps_init(&obj_templates);
+		if(obj_templates.alloc_failure)
+		{
+			vl_log(VL_ERROR, "Failed to create object template map!\n");
+			return 0;
+		}
+	}
+
+	// create template
+	obj_template temp = {0};
+	snprintf(temp.name, sizeof(temp.name), "%s", name);
+	snprintf(temp.str, sizeof(temp.str), "%s", str);
+	temp.size = size;
+
+	// save template info in map
+	dynmaps_set_strkey(&obj_templates, name, temp);
+	if(obj_templates.alloc_failure)
+	{
+		vl_log(VL_ERROR, "Failed to allocate memory for object template!\n");
+		return 0;
+	}
+
+	vl_log(VL_SUCCESS, "Object template successfully created: '%s'!\n", name);
+	return 1;
+}
+int snaky_destroy_object_template(const char *name)
+{
+	int result = -1;
+	dynmaps_remove_strkey_result(&obj_templates, name, result);
+
+	if(result == -1)
+	{
+		vl_log(VL_ERROR, "No object template exists with the name '%s'!\n", name);
+		return 0;
+	}
+
+	vl_log(VL_SUCCESS, "Object template '%s' successfully destroyed!\n", name);
+
+	// free the entire map if the number of objects is 0
+	if(obj_templates.size == 0)
+	{
+		vl_log(VL_INFO, "No more object templates exist; freeing all associated memory now!\n");
+		dynmaps_free_strkey(&obj_templates);
+	}
+
+	return 1;
+}
+int snaky_create_object(const char *name, char *buffer, size_t buffer_size)
+{
+	// try to find an object template with the given name
+	obj_template *temp = NULL;
+	dynmaps_get_strkey(&obj_templates, name, temp);
+
+	if(temp)
+	{
+		snprintf(buffer, buffer_size, "%s", temp->str);
+		return 1;
+	}
+
+	vl_log(VL_ERROR, "Failed to create object instance from object template: '%s'!\n", name);
+	return 0;
 }

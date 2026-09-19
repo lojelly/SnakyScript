@@ -15,6 +15,7 @@
 #endif
 
 #include <stddef.h>
+#include <string.h>
 
 /**
   Define SNAKY_CUSTOM_BUF_SIZE to change
@@ -203,6 +204,26 @@ SNAKY_API int snaky_add_arg(char *str, size_t buffer_size, const char *arg_name,
   @return 1 on success, 0 on failure.
 */
 SNAKY_API int snaky_set_arg(char *str, size_t buffer_size, const char *arg_name, const char *new_arg_value);
+/**
+  Modifies multiple argument values directly in a string.
+
+  To set multiple arguments, the 'args' string must be formatted
+  like this:
+
+  "<arg_name=new_arg_value,arg_name2=new_arg_value,...>"
+
+  For example, using this argument string:
+
+  "<x=100,y=200>"
+
+  To set both the 'x' and 'y' arguments at the same time, the function
+  would be called like this:
+
+  'snaky_set_args(str, sizeof(str), "<x=300,y=150>");'
+
+  @return 1 on success, 0 on failure.
+*/
+SNAKY_API int snaky_set_args(char *str, size_t buffer_size, const char *args);
 
 /**
   Counts the number of arguments within an argument string.
@@ -215,7 +236,7 @@ SNAKY_API size_t snaky_count_args(const char *str);
   @important Do not initialize the argument data map.
   This function automatically initializes it and populates
   it with the necessary data. Later, you must use
-  dynmaps_free_strkey(...) on the map to free its allocated
+  dynmaps_free_strkeyval(...) on the map to free its allocated
   memory.
 
   @return 1 on success, 0 on failure.
@@ -314,3 +335,42 @@ SNAKY_API void snaky_parse_value(const char *str, snaky_data_type target_type, v
   @see snaky_parse_target_arg(const char*, char*, size_t, const char*, const char**)
 */
 SNAKY_API void snaky_parse_target_arg_value(const char *str, const char *arg_name, snaky_data_type target_type, void *out_value, const char **out_start_pos, int *out_success);
+
+/**
+  Creates an object template.
+
+  Object templates allow for argument strings to be easily copied
+  and re-implemented for future instances.
+
+  @param name The name of the object template.
+  @param str The string to use as the template.
+  @param size The size of the string in bytes.
+
+  @return 1 on success, 0 on failure.
+*/
+SNAKY_API int snaky_create_object_template(const char *name, const char *str, size_t size);
+/**
+  Destroys and removes an object template.
+
+  @important You must call this for every object template you create.
+  When the last object template is destroyed, the internal memory
+  associated with object templates is freed.
+
+  @param name The name of the object template to destroy.
+
+  @return 1 on success, 0 on failure.
+*/
+SNAKY_API int snaky_destroy_object_template(const char *name);
+/**
+  Creates an instance of an object template using the
+  name of an existing object template.
+
+  @param name The name of the object template to create an instance of.
+  @param buffer Where to put the cloned string.
+  @param buffer_size The size of 'buffer' in bytes.
+
+  @see snaky_create_object_template(const char*, const char*, size_t)
+
+  @return 1 on success, 0 on failure.
+*/
+SNAKY_API int snaky_create_object(const char *name, char *buffer, size_t buffer_size);
