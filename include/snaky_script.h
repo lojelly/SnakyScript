@@ -14,6 +14,7 @@
 	#define SNAKY_API
 #endif
 
+#include <stdio.h>
 #include <stddef.h>
 #include <string.h>
 
@@ -28,6 +29,19 @@
 	  The default buffer size of SnakyScript.
 	*/
 	#define SNAKY_BUF_SIZE 64
+#endif
+
+/**
+  Define SNAKY_CUSTOM_MAX_LINE_LEN to change the
+  default maximum line length of SnakyScript files.
+*/
+#ifdef SNAKY_CUSTOM_MAX_LINE_LEN
+	#define SNAKY_MAX_LINE_LEN SNAKY_CUSTOM_MAX_LINE_LEN
+#else
+	/**
+	  The default maximum line length in a SnakyScript file.
+	*/
+	#define SNAKY_MAX_LINE_LEN 256
 #endif
 
 /**
@@ -374,3 +388,36 @@ SNAKY_API int snaky_destroy_object_template(const char *name);
   @return 1 on success, 0 on failure.
 */
 SNAKY_API int snaky_create_object(const char *name, char *buffer, size_t buffer_size);
+
+/**
+  Opens a file for reading SnakyScript from.
+
+  @param file_path The file path.
+  @param buffer Where the file's contents should be placed.
+  @param buffer_size The size of 'buffer' in bytes.
+
+  @return 1 on success, 0 on failure.
+*/
+SNAKY_API int snaky_read_file(const char *file_path, char *buffer, size_t buffer_size);
+/**
+  Obtains the size of a file in bytes.
+*/
+SNAKY_API long snaky_get_file_size(const char *file_path);
+/**
+  Obtains the next line in a buffer that contains the lines from
+  a read file.
+
+  @param cursor A pointer to the string containing ALL of the file's lines.
+  This is called the 'cursor' because as the file is read, this pointer
+  is moved forward. Because of this, if you are using malloc() to create
+  the char*, do not use that pointer here. Instead create another pointer and
+  use that. Moving the malloc()-ed pointer forward will lead to undefined
+  behavior.
+  @param buffer Where the next line should be placed.
+  @param buffer_size The size of 'buffer' in bytes.
+
+  @return 1 on success, 0 on failure.
+
+  @see snaky_read_file(const char*, char*, size_t)
+*/
+SNAKY_API int snaky_get_next_line(char **cursor, char *buffer, size_t buffer_size);

@@ -864,6 +864,15 @@ void snaky_parse_value(const char *str, snaky_data_type target_type, void *out_v
 	   for example, the expression 3 + 5 should result in 8 being parsed instead
 
 	   first step in parsing is to tokenize (split string into parts)
+
+	   when a char is found instead of a digit (move forward until a non-char character is found
+	   then determine what the user typed, a function name, variable name, another argument name)
+
+	   when a symbol like * or + is found, parse the 2 sides and do the math
+
+	   any numbers are parsed normally. always parse as floats or doubles so if any decimals
+	   are present they are retained, and if there are no decimals, the float value will be
+	   equal to the int value
 	*/
 
 	// TODO
@@ -1006,4 +1015,78 @@ int snaky_create_object(const char *name, char *buffer, size_t buffer_size)
 
 	vl_log(VL_ERROR, "Failed to create object instance from object template: '%s'!\n", name);
 	return 0;
+}
+
+int snaky_read_file(const char *file_path, char *buffer, size_t buffer_size)
+{
+	if(!file_path || strlen(file_path) == 0 || !buffer || buffer_size == 0)
+		return 0;
+
+	FILE *f = fopen(file_path, "r");
+	if(!f)
+	{
+		vl_log(VL_ERROR, "Failed to open file at path: '%s'!\n", file_path);
+		return 0;
+	}
+
+	char read[SNAKY_MAX_LINE_LEN];
+	size_t total_size = 0;
+	while(fgets(read, sizeof(read), f))
+	{
+		total_size += strlen(read);
+
+		if(total_size >= buffer_size)
+		{
+			vl_log(VL_ERROR, "Not enough memory allocated for reading file's contents: '%s'!\n", file_path);
+			return 0;
+		}
+
+		// append contents to user's buffer
+		if(!strcat(buffer, read))
+		{
+			vl_log(VL_ERROR, "Failed to append strings while reading file's contents: '%s'!\n", file_path);
+			return 0;
+		}
+	}
+
+	fclose(f);
+
+	return 1;
+}
+long snaky_get_file_size(const char *file_path)
+{
+	if(!file_path || strlen(file_path) == 0)
+		return 0;
+
+	FILE *f = fopen(file_path, "r");
+	if(!f)
+	{
+		vl_log(VL_ERROR, "Failed to open file at '%s'!\n", file_path);
+		return 0;
+	}
+
+	fseek(f, 0, SEEK_END);
+
+	long bytes = ftell(f);
+
+	fclose(f);
+
+	return bytes;
+}
+int snaky_get_next_line(char **cursor, char *buffer, size_t buffer_size)
+{
+	if(!cursor || !*cursor || strlen(*cursor) == 0 || !buffer || buffer_size == 0)
+		return 0;
+
+	// walk until a '\n' is found
+	size_t i = 0;
+	while(**cursor && **cursor != '\n' && i + 1 < buffer_size)
+		buffer[i++] = *(*cursor)++;
+
+	buffer[i] = '\0';
+
+	if(**cursor == '\n')
+		(*cursor)++;
+
+	return 1;
 }
