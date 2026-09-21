@@ -8,6 +8,9 @@
 
 static int parse_target_arg(const char *args_start, char *buffer, size_t buffer_size, const char *arg_name, size_t arg_len, const char **out_start_pos, snaky_data_type *out_data_type)
 {
+	if(out_data_type)
+		*out_data_type = SNAKY_INVALID_VALUE;
+
 	while(*args_start && *args_start != '=')
 	{
 		// while searching for the '=' try to also find the ':DATA_TYPE' string
@@ -739,12 +742,12 @@ int snaky_get_arg_data(const char *str, snaky_arg_data *data)
 
 char snaky_parse_char(const char *str, int *out_success)
 {
+	// default to 0
+	if(out_success)
+		*out_success = 0;
+
 	if(!str || strlen(str) != 1)
-	{
-		if(out_success)
-			*out_success = 0;
 		return '\0';
-	}
 
 	char c = *str;
 
@@ -755,12 +758,12 @@ char snaky_parse_char(const char *str, int *out_success)
 }
 bool snaky_parse_bool(const char *str, int *out_success)
 {
+	// default to 0
+	if(out_success)
+		*out_success = 0;
+
 	if(!str || strlen(str) == 0)
-	{
-		if(out_success)
-			*out_success = 0;
 		return false;
-	}
 
 	if(strcmp(str, "TRUE") == 0)
 	{
@@ -775,19 +778,147 @@ bool snaky_parse_bool(const char *str, int *out_success)
 		return false;
 	}
 	else
+		return false;
+}
+static float parse_expression(const char *str, int *out_success)
+{
+	float result = 0.0f;
+	bool return_result = false;
+	bool chained = false;
+	for(const char *p = str; *p; ++p)
+	{
+		size_t v = 0;
+		char val1[SNAKY_BUF_SIZE + 1];
+		if(*p == '-' && v + 1 < sizeof(val1))
+			val1[v++] = *(p++);
+		while(*p && (isdigit(*p) || *p == '.') && v + 1 < sizeof(val1))
+			val1[v++] = *(p++);
+
+		val1[v] = '\0';
+
+		parse_val2:
+
+		while(*p && *p == ' ')
+			p++;
+
+		char symbol = *p;
+
+		if(!(symbol && (symbol == '+' || symbol == '-' || symbol == '*' || symbol == '/')))
+			break;
+
+		return_result = true;
+
+		// skip symbol
+		p++;
+
+		while(*p && *p == ' ')
+			p++;
+
+		v = 0;
+		char val2[SNAKY_BUF_SIZE + 1];
+		if(*p == '-' && v + 1 < sizeof(val2))
+			val2[v++] = *(p++);
+		while(*p && (isdigit(*p) || *p == '.') && v + 1 < sizeof(val2))
+			val2[v++] = *(p++);
+
+		val2[v] = '\0';
+
+		// now parse each side as floats and calculate final result:
+		int s = 0;
+		float f1 = snaky_parse_float(val1, &s);
+		if(!s)
+		{
+			vl_log(VL_ERROR, "Failed to parse value: '%s'!\n", val1);
+			return 0;
+		}
+		float f2 = snaky_parse_float(val2, &s);
+		if(!s)
+		{
+			vl_log(VL_ERROR, "Failed to parse value: '%s'!\n", val2);
+			return 0;
+		}
+
+		if(!chained)
+		{
+			switch(symbol)
+			{
+				case '+':
+					result = f1 + f2;
+					break;
+				case '-':
+					result = f1 - f2;
+					break;
+				case '*':
+					result = f1 * f2;
+					break;
+				case '/':
+					result = f1 / f2;
+					break;
+				default:
+					vl_log(VL_ERROR, "Invalid symbol in expression: '%c'!\n", symbol);
+					return 0;
+			}
+		}
+		else
+		{
+			switch(symbol)
+			{
+				case '+':
+					result += f2;
+					break;
+				case '-':
+					result -= f2;
+					break;
+				case '*':
+					result *= f2;
+					break;
+				case '/':
+					result /= f2;
+					break;
+				default:
+					vl_log(VL_ERROR, "Invalid symbol in expression: '%c'!\n", symbol);
+					return 0;
+			}
+		}
+
+		// after parsing the 2nd value, if a 3rd value is present, restart the algorithm but with the current result as value 1
+
+		// skip last char in value 2
+		p++;
+
+		// make value 1 the current result
+		snprintf(val1, sizeof(val1), "%f", result);
+
+		chained = true;
+
+		goto parse_val2;
+	}
+
+	if(return_result)
 	{
 		if(out_success)
-			*out_success = 0;
-		return false;
+			*out_success = 1;
+		return result;
 	}
+
+	return 0.0f;
 }
 int snaky_parse_int(const char *str, int *out_success)
 {
+	// default to 0
+	if(out_success)
+		*out_success = 0;
+
 	if(!str || strlen(str) == 0)
+		return 0;
+
+	int s = 0;
+	float ff = parse_expression(str, &s);
+	if(s == 1)
 	{
 		if(out_success)
-			*out_success = 0;
-		return 0;
+			*out_success = 1;
+		return ff;
 	}
 
 	char *endptr = NULL;
@@ -799,17 +930,24 @@ int snaky_parse_int(const char *str, int *out_success)
 		return i;
 	}
 
-	if(out_success)
-		*out_success = 0;
 	return 0;
 }
 float snaky_parse_float(const char *str, int *out_success)
 {
+	// default to 0
+	if(out_success)
+		*out_success = 0;
+
 	if(!str || strlen(str) == 0)
+		return 0.0f;
+
+	int s = 0;
+	float ff = parse_expression(str, &s);
+	if(s == 1)
 	{
 		if(out_success)
-			*out_success = 0;
-		return 0.0f;
+			*out_success = 1;
+		return ff;
 	}
 
 	char *endptr = NULL;
@@ -821,17 +959,24 @@ float snaky_parse_float(const char *str, int *out_success)
 		return f;
 	}
 
-	if(out_success)
-		*out_success = 0;
 	return 0.0f;
 }
 double snaky_parse_double(const char *str, int *out_success)
 {
+	// default to 0
+	if(out_success)
+		*out_success = 0;
+
 	if(!str || strlen(str) == 0)
+		return 0.0;
+
+	int s = 0;
+	float ff = parse_expression(str, &s);
+	if(s == 1)
 	{
 		if(out_success)
-			*out_success = 0;
-		return 0.0;
+			*out_success = 1;
+		return ff;
 	}
 
 	char *endptr = NULL;
@@ -843,8 +988,6 @@ double snaky_parse_double(const char *str, int *out_success)
 		return d;
 	}
 
-	if(out_success)
-		*out_success = 0;
 	return 0.0;
 }
 void snaky_parse_value(const char *str, snaky_data_type target_type, void *out_value, int *out_success)
@@ -857,25 +1000,6 @@ void snaky_parse_value(const char *str, snaky_data_type target_type, void *out_v
 
 	// make sure it's 0 by default
 	*out_success = 0;
-
-	/*
-	   evaluate any expressions:
-
-	   for example, the expression 3 + 5 should result in 8 being parsed instead
-
-	   first step in parsing is to tokenize (split string into parts)
-
-	   when a char is found instead of a digit (move forward until a non-char character is found
-	   then determine what the user typed, a function name, variable name, another argument name)
-
-	   when a symbol like * or + is found, parse the 2 sides and do the math
-
-	   any numbers are parsed normally. always parse as floats or doubles so if any decimals
-	   are present they are retained, and if there are no decimals, the float value will be
-	   equal to the int value
-	*/
-
-	// TODO
 
 	switch(target_type)
 	{
@@ -926,7 +1050,11 @@ void snaky_parse_target_arg_value(const char *str, const char *arg_name, snaky_d
 	char arg[SNAKY_BUF_SIZE + 1];
 	snaky_data_type resolved_type = SNAKY_INVALID_VALUE;
 	if(snaky_parse_target_arg(str, arg, sizeof(arg), arg_name, out_start_pos, &resolved_type))
+	{
+		if(resolved_type == SNAKY_INVALID_VALUE)
+			resolved_type = target_type;
 		snaky_parse_value(arg, resolved_type, out_value, out_success);
+	}
 
 	if(*out_success == 0)
 		vl_log(VL_ERROR, "Failed to parse target arg value: string: '%s', argument name: '%s'!\n", str, arg_name);
