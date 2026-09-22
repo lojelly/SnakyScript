@@ -1,3 +1,6 @@
+#define _USE_MATH_DEFINES
+
+#include <math.h>
 #include <ctype.h>
 #include <string.h>
 #include "vibrant_logs.h"
@@ -780,130 +783,214 @@ bool snaky_parse_bool(const char *str, int *out_success)
 	else
 		return false;
 }
-static float parse_expression(const char *str, int *out_success)
+
+static char peek_next_char(const char **str)
 {
-	float result = 0.0f;
-	bool return_result = false;
-	bool chained = false;
-	for(const char *p = str; *p; ++p)
+	while(**str && **str == ' ')
+		(*str)++;
+	return **str;
+}
+static char get_next_char(const char **str)
+{
+	while(**str && **str == ' ')
+		(*str)++;
+	return *(*str)++;
+}
+static float parse_term(const char*, const char**, int*);
+static float parse_expression(const char *origin, const char **str, int *out_success)
+{
+	int s = 0;
+	float f = parse_term(origin, str, &s);
+	*out_success = s;
+	if(s == 0)
+		return 0.0f;
+	while(peek_next_char(str) == '+' || peek_next_char(str) == '-')
 	{
-		size_t v = 0;
-		char val1[SNAKY_BUF_SIZE + 1];
-		if(*p == '-' && v + 1 < sizeof(val1))
-			val1[v++] = *(p++);
-		while(*p && (isdigit(*p) || *p == '.') && v + 1 < sizeof(val1))
-			val1[v++] = *(p++);
+		char op = get_next_char(str);
+		float next_val = parse_term(origin, str, &s);
+		*out_success = s;
+		if(s == 0)
+			return 0.0f;
+		if(op == '+')
+			f += next_val;
+		else
+			f -= next_val;
+	}
+	return f;
+}
+#define parse_fn_name(origin, str, arg_name, fn_name, result, success) \
+	do { \
+		if(strcmp(arg_name, fn_name) == 0) \
+		{ \
+			if(peek_next_char(str) == '(') \
+			{ \
+				char next = get_next_char(str); \
+				int s = 0; \
+				float f = parse_expression(origin, str, &s); \
+				*success = s; \
+				if(s == 0) \
+					return 0.0f; \
+				if(peek_next_char(str) == ')') \
+				{ \
+					get_next_char(str); \
+					*success = 1; \
+					return result; \
+				} \
+				else \
+					return 0.0f; \
+			} \
+		} \
+	} while(0)
+#define parse_constant(arg_name, constant_name, result) \
+	do { \
+		if(strcmp(arg_name, constant_name) == 0) \
+		{ \
+			*out_success = 1; \
+			return result; \
+		} \
+	} while(0)
+static float factorial(float f)
+{
+	if(f == 0)
+		return 1.0f;
 
-		val1[v] = '\0';
+	float ff = f;
+	while(f > 1)
+		ff *= (f -= 1);
 
-		parse_val2:
-
-		while(*p && *p == ' ')
-			p++;
-
-		char symbol = *p;
-
-		if(!(symbol && (symbol == '+' || symbol == '-' || symbol == '*' || symbol == '/')))
-			break;
-
-		return_result = true;
-
-		// skip symbol
-		p++;
-
-		while(*p && *p == ' ')
-			p++;
-
-		v = 0;
-		char val2[SNAKY_BUF_SIZE + 1];
-		if(*p == '-' && v + 1 < sizeof(val2))
-			val2[v++] = *(p++);
-		while(*p && (isdigit(*p) || *p == '.') && v + 1 < sizeof(val2))
-			val2[v++] = *(p++);
-
-		val2[v] = '\0';
-
-		// now parse each side as floats and calculate final result:
+	return ff;
+}
+static float parse_factor(const char *origin, const char **str, int *out_success)
+{
+	// find expression wrapped around '()'
+	char c = peek_next_char(str);
+	if(c == '(')
+	{
+		char next = get_next_char(str);
 		int s = 0;
-		float f1 = snaky_parse_float(val1, &s);
-		if(!s)
+		float f = parse_expression(origin, str, &s);
+		*out_success = s;
+		if(s == 0)
+			return 0.0f;
+		if(peek_next_char(str) == ')')
 		{
-			vl_log(VL_ERROR, "Failed to parse value: '%s'!\n", val1);
-			return 0;
-		}
-		float f2 = snaky_parse_float(val2, &s);
-		if(!s)
-		{
-			vl_log(VL_ERROR, "Failed to parse value: '%s'!\n", val2);
-			return 0;
-		}
-
-		if(!chained)
-		{
-			switch(symbol)
-			{
-				case '+':
-					result = f1 + f2;
-					break;
-				case '-':
-					result = f1 - f2;
-					break;
-				case '*':
-					result = f1 * f2;
-					break;
-				case '/':
-					result = f1 / f2;
-					break;
-				default:
-					vl_log(VL_ERROR, "Invalid symbol in expression: '%c'!\n", symbol);
-					return 0;
-			}
+			get_next_char(str);
+			*out_success = 1;
+			return f;
 		}
 		else
+			return 0.0f;
+	}
+
+	// see if it's just a normal number
+	if(isdigit(c) || c == '-' || c == '.')
+	{
+		char *end = NULL;
+		float f = strtof(*str, &end);
+		if(end == *str)
 		{
-			switch(symbol)
-			{
-				case '+':
-					result += f2;
-					break;
-				case '-':
-					result -= f2;
-					break;
-				case '*':
-					result *= f2;
-					break;
-				case '/':
-					result /= f2;
-					break;
-				default:
-					vl_log(VL_ERROR, "Invalid symbol in expression: '%c'!\n", symbol);
-					return 0;
-			}
+			*out_success = 0;
+			return 0.0f;
+		}
+		*str = end;
+		*out_success = 1;
+		return f;
+	}
+
+	// see if user provided a function or arg name
+	if(isalpha(c))
+	{
+		char arg_name[SNAKY_BUF_SIZE + 1];
+		size_t i = 0;
+		while(**str && isalpha(**str) && i + 1 < sizeof(arg_name))
+			arg_name[i++] = *(*str)++;
+
+		arg_name[i] = '\0';
+
+		// see what the value is:
+
+		// try to parse as a target argument:
+		char arg[SNAKY_BUF_SIZE + 1];
+		if(snaky_parse_target_arg(origin, arg, sizeof(arg), arg_name, NULL, NULL))
+		{
+			float f = 0.0f;
+			int s = 0;
+			snaky_parse_value(origin, arg, SNAKY_FLOAT, &f, &s);
+			*out_success = s;
+			if(s == 1)
+				return f;
 		}
 
-		// after parsing the 2nd value, if a 3rd value is present, restart the algorithm but with the current result as value 1
-
-		// skip last char in value 2
-		p++;
-
-		// make value 1 the current result
-		snprintf(val1, sizeof(val1), "%f", result);
-
-		chained = true;
-
-		goto parse_val2;
+		parse_constant(arg_name, "PI", M_PI);
+		parse_constant(arg_name, "INF", INFINITY);
+		parse_constant(arg_name, "NAN", NAN);
+		parse_fn_name(origin, str, arg_name, "sin", sinf(f), out_success);
+		parse_fn_name(origin, str, arg_name, "cos", cosf(f), out_success);
+		parse_fn_name(origin, str, arg_name, "tan", tanf(f), out_success);
+		parse_fn_name(origin, str, arg_name, "sqrt", sqrtf(f), out_success);
+		parse_fn_name(origin, str, arg_name, "factorial", factorial(f), out_success);
+		parse_fn_name(origin, str, arg_name, "rads", f * (M_PI / 180.0f), out_success);
 	}
 
-	if(return_result)
-	{
-		if(out_success)
-			*out_success = 1;
-		return result;
-	}
-
+	*out_success = 0;
 	return 0.0f;
 }
-int snaky_parse_int(const char *str, int *out_success)
+static float parse_exponent(const char*, const char**, int*);
+static float parse_term(const char *origin, const char **str, int *out_success)
+{
+	int s = 0;
+	float f = parse_exponent(origin, str, &s);
+	*out_success = s;
+	if(s == 0)
+		return 0.0f;
+
+	while(peek_next_char(str) == '*' || peek_next_char(str) == '/')
+	{
+		char op = get_next_char(str);
+		float next_val = parse_exponent(origin, str, &s);
+		*out_success = s;
+		if(s == 0)
+			return 0.0f;
+		if(op == '*')
+			f *= next_val;
+		else
+		{
+			if(next_val == 0)
+			{
+				vl_log(VL_WARNING, "Dividing by 0 is undefined. Returning 0.0f.\n");
+				return 0.0f;
+			}
+			f /= next_val;
+		}
+
+		*out_success = 1;
+	}
+
+	return f;
+}
+static float parse_exponent(const char *origin, const char **str, int *out_success)
+{
+	int s = 0;
+	float f = parse_factor(origin, str, &s);
+	*out_success = s;
+	if(s == 0)
+		return 0.0f;
+	
+	if(peek_next_char(str) == '^')
+	{
+		get_next_char(str);
+
+		float exp = parse_exponent(origin, str, &s);
+		*out_success = s;
+		if(s == 0)
+			return 0.0f;
+		f = powf(f, exp);
+	}
+
+	*out_success = 1;
+	return f;
+}
+int snaky_parse_int(const char *origin, const char *str, int *out_success)
 {
 	// default to 0
 	if(out_success)
@@ -913,7 +1000,7 @@ int snaky_parse_int(const char *str, int *out_success)
 		return 0;
 
 	int s = 0;
-	float ff = parse_expression(str, &s);
+	float ff = parse_expression(origin, &str, &s);
 	if(s == 1)
 	{
 		if(out_success)
@@ -932,7 +1019,7 @@ int snaky_parse_int(const char *str, int *out_success)
 
 	return 0;
 }
-float snaky_parse_float(const char *str, int *out_success)
+float snaky_parse_float(const char *origin, const char *str, int *out_success)
 {
 	// default to 0
 	if(out_success)
@@ -942,7 +1029,7 @@ float snaky_parse_float(const char *str, int *out_success)
 		return 0.0f;
 
 	int s = 0;
-	float ff = parse_expression(str, &s);
+	float ff = parse_expression(origin, &str, &s);
 	if(s == 1)
 	{
 		if(out_success)
@@ -961,7 +1048,7 @@ float snaky_parse_float(const char *str, int *out_success)
 
 	return 0.0f;
 }
-double snaky_parse_double(const char *str, int *out_success)
+double snaky_parse_double(const char *origin, const char *str, int *out_success)
 {
 	// default to 0
 	if(out_success)
@@ -971,7 +1058,7 @@ double snaky_parse_double(const char *str, int *out_success)
 		return 0.0;
 
 	int s = 0;
-	float ff = parse_expression(str, &s);
+	float ff = parse_expression(origin, &str, &s);
 	if(s == 1)
 	{
 		if(out_success)
@@ -990,7 +1077,7 @@ double snaky_parse_double(const char *str, int *out_success)
 
 	return 0.0;
 }
-void snaky_parse_value(const char *str, snaky_data_type target_type, void *out_value, int *out_success)
+void snaky_parse_value(const char *origin, const char *str, snaky_data_type target_type, void *out_value, int *out_success)
 {
 	if(!out_success)
 	{
@@ -1014,17 +1101,17 @@ void snaky_parse_value(const char *str, snaky_data_type target_type, void *out_v
 				*((bool*) out_value) = b;
 			break;
 		case SNAKY_INT:
-			int i = snaky_parse_int(str, out_success);
+			int i = snaky_parse_int(origin, str, out_success);
 			if(*out_success == 1 && out_value)
 				*((int*) out_value) = i;
 			break;
 		case SNAKY_FLOAT:
-			float f = snaky_parse_float(str, out_success);
+			float f = snaky_parse_float(origin, str, out_success);
 			if(*out_success == 1 && out_value)
 				*((float*) out_value) = f;
 			break;
 		case SNAKY_DOUBLE:
-			double d = snaky_parse_double(str, out_success);
+			double d = snaky_parse_double(origin, str, out_success);
 			if(*out_success == 1 && out_value)
 				*((double*) out_value) = d;
 			break;
@@ -1053,7 +1140,7 @@ void snaky_parse_target_arg_value(const char *str, const char *arg_name, snaky_d
 	{
 		if(resolved_type == SNAKY_INVALID_VALUE)
 			resolved_type = target_type;
-		snaky_parse_value(arg, resolved_type, out_value, out_success);
+		snaky_parse_value(str, arg, resolved_type, out_value, out_success);
 	}
 
 	if(*out_success == 0)

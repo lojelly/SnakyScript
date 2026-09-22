@@ -286,35 +286,38 @@ SNAKY_API bool snaky_parse_bool(const char *str, int *out_success);
   Reads an integer argument value and obtains the
   actual int equivalent of it.
 
+  @param origin The start of the whole argument string.
   @param str The string holding the integer argument value. This is not
   an argument string.
   @param out_success A pointer to an int that indicates
   whether or not the function succeeded. It will be equal to 1 if it
   succeeded, and 0 if it failed.
 */
-SNAKY_API int snaky_parse_int(const char *str, int *out_success);
+SNAKY_API int snaky_parse_int(const char *origin, const char *str, int *out_success);
 /**
   Reads a float argument value and obtains the
   actual float equivalent of it.
 
+  @param origin The start of the whole argument string.
   @param str The string holding the float argument value. This is not
   an argument string.
   @param out_success A pointer to an int that indicates whether
   or not the function succeeded. It will be equal to 1 if it
   succeeded, and 0 if it failed.
 */
-SNAKY_API float snaky_parse_float(const char *str, int *out_success);
+SNAKY_API float snaky_parse_float(const char *origin, const char *str, int *out_success);
 /**
   Reads a double argument value and obtains the
   actual double equivalent of it.
 
+  @param origin The start of the whole argument string.
   @param str The string holding the double argument value. This is not
   an argument string.
   @param out_success A pointer to an int that indicates whether
   or not the function succeeded. It will be equal to 1 if it
   succeeded, and 0 if it failed.
 */
-SNAKY_API double snaky_parse_double(const char *str, int *out_success);
+SNAKY_API double snaky_parse_double(const char *origin, const char *str, int *out_success);
 /**
   Similarly to other snaky_parse_[type] functions, this function
   parses a generic value based on a target data type.
@@ -323,6 +326,8 @@ SNAKY_API double snaky_parse_double(const char *str, int *out_success);
   needs to be able to determine if parsing failed or not,
   the 'out_success' pointer cannot be NULL.
 
+  @param origin The start of the whole argument string. This used
+  for resolving argument names in expressions throughout the string.
   @param str The string holding the generic value. This is not
   an argument string.
   @param target_type The data type to try to parse
@@ -338,7 +343,7 @@ SNAKY_API double snaky_parse_double(const char *str, int *out_success);
 
   @see snaky_parse_target_arg_value(const char*, const char*, snaky_data_type, void*, const char**, int*)
 */
-SNAKY_API void snaky_parse_value(const char *str, snaky_data_type target_type, void *out_value, int *out_success);
+SNAKY_API void snaky_parse_value(const char *origin, const char *str, snaky_data_type target_type, void *out_value, int *out_success);
 /**
   Parses a generic value just like snaky_parse_value(...) but obtains
   the value from an argument from an argument string.
