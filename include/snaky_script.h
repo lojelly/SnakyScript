@@ -117,6 +117,27 @@ typedef enum snaky_data_type
 } snaky_data_type;
 
 /**
+  Initializes the SnakyScript library.
+
+  @important Make sure you call snaky_shutdown()
+  later!
+
+  @return 1 on success, 0 on failure.
+*/
+SNAKY_API int snaky_init(void);
+/**
+  Determines if SnakyScript has been initialized.
+*/
+SNAKY_API bool snaky_is_init(void);
+/**
+  Shuts down and frees any memory allocated
+  by SnakyScript.
+
+  @return 1 on success, 0 on failure.
+*/
+SNAKY_API int snaky_shutdown(void);
+
+/**
   Searches the given string for a specific argument and tries to parse its value.
 
   Example strings and arguments:
@@ -275,6 +296,8 @@ SNAKY_API char snaky_parse_char(const char *str, int *out_success);
   @note The "OPPOSITE" argument value is not accepted
   here.
 
+  @note Valid boolean arguments include: 'TRUE,' 'ON,' 'FALSE,' and 'OFF.'
+
   @param str The string holding the boolean argument value. This is not
   an argument string.
   @param out_success A pointer to an int that indicates whether
@@ -426,3 +449,46 @@ SNAKY_API long snaky_get_file_size(const char *file_path);
   @see snaky_read_file(const char*, char*, size_t)
 */
 SNAKY_API int snaky_get_next_line(char **cursor, char *buffer, size_t buffer_size);
+
+/**
+  Single-argument functions that are evaluated in argument
+  strings.
+
+  They should take in a single float value, and return a
+  single float value.
+*/
+typedef float (*snaky_eval_func) (float);
+
+/**
+  Registers a constant that can be used in argument strings later.
+
+  Constants are single string values, such as 'PI' and should
+  be equal to a single value.
+
+  @note It is recommended to make all constants uppercase
+  to keep them clearly separated from other values or functions.
+
+  @param str The constant to define.
+  @param value The value of the constant.
+
+  @return 1 on success, 0 on failure.
+*/
+SNAKY_API int snaky_define_constant(const char *str, float value);
+/**
+  Registers a function that can be used in argument strings later.
+
+  Functions are single string values, such as 'sin' and should
+  take in a single value, and return a single result.
+
+  When using functions in argument strings, you must use the
+  function name, then an opening '(' followed by the value, and then a closing
+  ').'
+
+  @param str The function to define.
+  @param func A pointer to the function to use.
+
+  @return 1 on success, 0 on failure.
+
+  @see snaky_eval_func
+*/
+SNAKY_API int snaky_define_function(const char *str, snaky_eval_func func);

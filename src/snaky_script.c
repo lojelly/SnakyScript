@@ -9,6 +9,119 @@
 
 #define STRING_DELIM '"'
 
+static bool init = false;
+
+// map of constant names to constant values:
+typedef struct constant_registry
+{
+	char **keys;
+	float *values;
+	size_t size, capacity;
+	bool alloc_failure;
+} constant_registry;
+static constant_registry constants = {0};
+
+// map of function names to generic pointers:
+typedef struct func_registry
+{
+	char **keys;
+	snaky_eval_func *values;
+	size_t size, capacity;
+	bool alloc_failure;
+} func_registry;
+static func_registry functions = {0};
+
+static float factorial(float f)
+{
+	if(f == 0)
+		return 1.0f;
+
+	float ff = f;
+	while(f > 1)
+		ff *= (f -= 1);
+
+	return ff;
+}
+static float rads(float f)
+{
+	return f * (M_PI / 180.0f);
+}
+
+int snaky_init()
+{
+	if(init)
+	{
+		vl_log(VL_ERROR, "Cannot re-initialize SnakyScript!\n");
+		return 0;
+	}
+
+	dynmaps_init(&constants);
+	if(constants.alloc_failure)
+	{
+		vl_log(VL_ERROR, "Failed to allocate memory for constants registry!\n");
+		return 0;
+	}
+
+	dynmaps_init(&functions);
+	if(functions.alloc_failure)
+	{
+		vl_log(VL_ERROR, "Failed to allocate memory for functions registry!\n");
+		return 0;
+	}
+
+	// make 'init' true here since define_constant(...) will fail if it's false
+	init = true;
+
+	// define some constants
+	if(!snaky_define_constant("E", M_E))
+		return 0;
+	if(!snaky_define_constant("PI", M_PI))
+		return 0;
+	if(!snaky_define_constant("INF", INFINITY))
+		return 0;
+	if(!snaky_define_constant("NAN", NAN))
+		return 0;
+
+	// define some functions
+	if(!snaky_define_function("factorial", factorial))
+		return 0;
+	if(!snaky_define_function("sin", sinf))
+		return 0;
+	if(!snaky_define_function("cos", cosf))
+		return 0;
+	if(!snaky_define_function("tan", tanf))
+		return 0;
+	if(!snaky_define_function("sqrt", sqrtf))
+		return 0;
+	if(!snaky_define_function("rads", rads))
+		return 0;
+	if(!snaky_define_function("round", roundf))
+		return 0;
+	if(!snaky_define_function("floor", floorf))
+		return 0;
+	if(!snaky_define_function("ceil", ceilf))
+		return 0;
+
+	return 1;
+}
+bool snaky_is_init()
+{
+	return init;
+}
+int snaky_shutdown()
+{
+	if(!init)
+	{
+		vl_log(VL_ERROR, "SnakyScript was never initialized, cannot shutdown!\n");
+		return 0;
+	}
+
+	dynmaps_free_strkey(&constants);
+	dynmaps_free_strkey(&functions);
+
+	return 1;
+}
+
 static int parse_target_arg(const char *args_start, char *buffer, size_t buffer_size, const char *arg_name, size_t arg_len, const char **out_start_pos, snaky_data_type *out_data_type)
 {
 	if(out_data_type)
@@ -612,8 +725,12 @@ int snaky_set_arg(char *str, size_t buffer_size, const char *arg_name, const cha
 	{
 		if(strcmp(arg_value, "TRUE") == 0)
 			new_arg_value = "FALSE";
+		else if(strcmp(arg_value, "ON") == 0)
+			new_arg_value = "OFF";
 		else if(strcmp(arg_value, "FALSE") == 0)
 			new_arg_value = "TRUE";
+		else if(strcmp(arg_value, "OFF") == 0)
+			new_arg_value = "ON";
 		else
 		{
 			vl_log(VL_ERROR, "The 'OPPOSITE' arg value can only be used on boolean arguments!\n");
@@ -768,13 +885,13 @@ bool snaky_parse_bool(const char *str, int *out_success)
 	if(!str || strlen(str) == 0)
 		return false;
 
-	if(strcmp(str, "TRUE") == 0)
+	if(strcmp(str, "TRUE") == 0 || strcmp(str, "ON") == 0)
 	{
 		if(out_success)
 			*out_success = 1;
 		return true;
 	}
-	else if(strcmp(str, "FALSE") == 0)
+	else if(strcmp(str, "FALSE") == 0 || strcmp(str, "OFF") == 0)
 	{
 		if(out_success)
 			*out_success = 1;
@@ -818,48 +935,6 @@ static float parse_expression(const char *origin, const char **str, int *out_suc
 	}
 	return f;
 }
-#define parse_fn_name(origin, str, arg_name, fn_name, result, success) \
-	do { \
-		if(strcmp(arg_name, fn_name) == 0) \
-		{ \
-			if(peek_next_char(str) == '(') \
-			{ \
-				char next = get_next_char(str); \
-				int s = 0; \
-				float f = parse_expression(origin, str, &s); \
-				*success = s; \
-				if(s == 0) \
-					return 0.0f; \
-				if(peek_next_char(str) == ')') \
-				{ \
-					get_next_char(str); \
-					*success = 1; \
-					return result; \
-				} \
-				else \
-					return 0.0f; \
-			} \
-		} \
-	} while(0)
-#define parse_constant(arg_name, constant_name, result) \
-	do { \
-		if(strcmp(arg_name, constant_name) == 0) \
-		{ \
-			*out_success = 1; \
-			return result; \
-		} \
-	} while(0)
-static float factorial(float f)
-{
-	if(f == 0)
-		return 1.0f;
-
-	float ff = f;
-	while(f > 1)
-		ff *= (f -= 1);
-
-	return ff;
-}
 static float parse_factor(const char *origin, const char **str, int *out_success)
 {
 	// find expression wrapped around '()'
@@ -902,7 +977,7 @@ static float parse_factor(const char *origin, const char **str, int *out_success
 	{
 		char arg_name[SNAKY_BUF_SIZE + 1];
 		size_t i = 0;
-		while(**str && isalpha(**str) && i + 1 < sizeof(arg_name))
+		while(**str && (isalpha(**str) || **str == '_') && i + 1 < sizeof(arg_name))
 			arg_name[i++] = *(*str)++;
 
 		arg_name[i] = '\0';
@@ -921,15 +996,43 @@ static float parse_factor(const char *origin, const char **str, int *out_success
 				return f;
 		}
 
-		parse_constant(arg_name, "PI", M_PI);
-		parse_constant(arg_name, "INF", INFINITY);
-		parse_constant(arg_name, "NAN", NAN);
-		parse_fn_name(origin, str, arg_name, "sin", sinf(f), out_success);
-		parse_fn_name(origin, str, arg_name, "cos", cosf(f), out_success);
-		parse_fn_name(origin, str, arg_name, "tan", tanf(f), out_success);
-		parse_fn_name(origin, str, arg_name, "sqrt", sqrtf(f), out_success);
-		parse_fn_name(origin, str, arg_name, "factorial", factorial(f), out_success);
-		parse_fn_name(origin, str, arg_name, "rads", f * (M_PI / 180.0f), out_success);
+		// parse all matching constants:
+		for(size_t i = 0; i < constants.size; ++i)
+		{
+			if(strcmp(arg_name, constants.keys[i]) == 0)
+			{
+				*out_success = 1;
+				return constants.values[i];
+			}
+		}
+
+		// parse all matching functions:
+		for(size_t i = 0; i < functions.size; ++i)
+		{
+			if(strcmp(arg_name, functions.keys[i]) == 0)
+			{
+				if(peek_next_char(str) == '(')
+				{
+					char next = get_next_char(str);
+					int s = 0;
+					float f = parse_expression(origin, str, &s);
+					*out_success = s;
+					if(s == 0)
+						return 0.0f;
+					if(peek_next_char(str) == ')')
+					{
+						get_next_char(str);
+						*out_success = 1;
+						return functions.values[i](f);
+					}
+					else
+					{
+						vl_log(VL_ERROR, "Expected ')' after function: '%s'!\n", functions.keys[i]);
+						return 0.0f;
+					}
+				}
+			}
+		}
 	}
 
 	*out_success = 0;
@@ -1302,6 +1405,41 @@ int snaky_get_next_line(char **cursor, char *buffer, size_t buffer_size)
 
 	if(**cursor == '\n')
 		(*cursor)++;
+
+	return 1;
+}
+
+int snaky_define_constant(const char *str, float value)
+{
+	if(!init)
+	{
+		vl_log(VL_ERROR, "Cannot define a constant without initializing SnakyScript!\n");
+		return 0;
+	}
+
+	dynmaps_set_strkey(&constants, str, value);
+	if(constants.alloc_failure)
+	{
+		vl_log(VL_ERROR, "Failed to define constant: '%s'. An allocation error occurred!\n", str);
+		return 0;
+	}
+
+	return 1;
+}
+int snaky_define_function(const char *str, snaky_eval_func func)
+{
+	if(!func)
+	{
+		vl_log(VL_ERROR, "Cannot define a NULL function!\n");
+		return 0;
+	}
+
+	dynmaps_set_strkey(&functions, str, func);
+	if(functions.alloc_failure)
+	{
+		vl_log(VL_ERROR, "Failed to define function: '%s'. An allocation error occurred!\n", str);
+		return 0;
+	}
 
 	return 1;
 }
