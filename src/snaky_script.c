@@ -124,6 +124,7 @@ int snaky_shutdown()
 
 static int parse_target_arg(const char *args_start, char *buffer, size_t buffer_size, const char *arg_name, size_t arg_len, const char **out_start_pos, snaky_data_type *out_data_type)
 {
+	// default to invalid value
 	if(out_data_type)
 		*out_data_type = SNAKY_INVALID_VALUE;
 
@@ -226,7 +227,7 @@ static int parse_target_arg(const char *args_start, char *buffer, size_t buffer_
 
 		// copy everything in the string exactly as is
 		size_t i = 0;
-		while(*args_start && *args_start != STRING_DELIM && i + 1 < buffer_size)
+		while(buffer && buffer_size > 0 && *args_start && *args_start != STRING_DELIM && i + 1 < buffer_size)
 			buffer[i++] = *args_start++;
 
 		if(!*args_start)
@@ -235,17 +236,19 @@ static int parse_target_arg(const char *args_start, char *buffer, size_t buffer_
 			return 0;
 		}
 
-		buffer[i] = '\0';
+		if(buffer)
+			buffer[i] = '\0';
 
 		return 1;
 	}
 
 	// if not a nested string, copy the arg value normally
 	size_t i = 0;
-	while(*args_start && *args_start != '>' && *args_start != ',' && i + 1 < buffer_size)
+	while(buffer && buffer_size > 0 && *args_start && *args_start != '>' && *args_start != ',' && i + 1 < buffer_size)
 		buffer[i++] = *args_start++;
 
-	buffer[i] = '\0';
+	if(buffer)
+		buffer[i] = '\0';
 
 	return 1;
 }
@@ -253,7 +256,7 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 {
 	size_t arg_len = arg_name ? strlen(arg_name) : 0;
 
-	if(!str || strlen(str) == 0 || !buffer || buffer_size == 0 || !arg_name || arg_len == 0)
+	if(!str || strlen(str) == 0 || !arg_name || arg_len == 0)
 		return 0;
 
 	bool in_top_most_level = false;
@@ -262,7 +265,7 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 
 	// the resolved arg name is the final argument name after the last '.' character in the original argument name string
 	const char *resolved_arg_name = arg_name;
-	size_t resolved_arg_len = arg_len;
+	size_t resolved_arg_len = 0;
 	size_t last_nested_arg_pos = 0;
 	int i = 0;
 	for(const char *p = arg_name; *p; ++p)
@@ -302,7 +305,7 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 
 			while(*p && *p != STRING_DELIM)
 			{
-				if(resolved_arg_len > 0)
+				if(last_nested_arg_pos > 0)
 				{
 					const char *args_start = p + 1;
 
@@ -379,26 +382,6 @@ int snaky_parse_target_arg(const char *str, char *buffer, size_t buffer_size, co
 		// if a nested argument string is found, skip it
 		if(c == '<' && in_top_most_level)
 		{
-			/*while(*p && *p != '>')
-				++p;
-
-			if(!*p)
-			{
-				vl_log(VL_ERROR, "Unexpected termination of argument string at '%c'!\n", *(p - 1));
-				return 0;
-			}
-
-			// skip the '>'
-			p++;
-
-			if(!*p)
-			{
-				vl_log(VL_ERROR, "Expected '>' in nested argument string: '%s'!\n", str);
-				return 0;
-			}
-
-			continue;*/
-
 			vl_log(VL_ERROR, "Nested arguments must be wrapped in opening and closing '\"'\n");
 			return 0;
 		}
@@ -1246,6 +1229,7 @@ void snaky_parse_target_arg_value(const char *str, const char *arg_name, snaky_d
 		snaky_parse_value(str, arg, resolved_type, out_value, out_success);
 	}
 
+	// TODO should these functions emit these error messages? or leave that up to the user?
 	if(*out_success == 0)
 		vl_log(VL_ERROR, "Failed to parse target arg value: string: '%s', argument name: '%s'!\n", str, arg_name);
 }
@@ -1346,6 +1330,9 @@ int snaky_read_file(const char *file_path, char *buffer, size_t buffer_size)
 		vl_log(VL_ERROR, "Failed to open file at path: '%s'!\n", file_path);
 		return 0;
 	}
+
+	// make sure buffer is valid:
+	*buffer = '\0';
 
 	char read[SNAKY_MAX_LINE_LEN];
 	size_t total_size = 0;

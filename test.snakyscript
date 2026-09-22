@@ -1,3 +1,2 @@
-<elem-id = 4, size = 30, x = 20, y = 20>
-<elem-id = 5, size = 30, x = 20 + 35, y = 20 + 35>
-<elem-id = 5, size = 30, x = 20 + size * 2, y = size * 3.5>
+<point = "<x = 0, y = 10>">
+<point = "<x = 202, y = 83>">

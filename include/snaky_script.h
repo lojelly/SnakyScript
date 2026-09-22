@@ -101,19 +101,7 @@ typedef enum snaky_data_type
 	/**
 	  Represents the double type.
 	*/
-	SNAKY_DOUBLE,
-	/**
-	  Represents the automatic type.
-
-	  @note For this to work, the argument
-	  being parsed must have a valid
-	  data type attached to it. To provide
-	  an argument with a data type, place
-	  ":DATA_TYPE" directly after the name
-	  of the argument. For example:
-	  '<arg_name:int=30>.'
-	*/
-	SNAKY_AUTO
+	SNAKY_DOUBLE
 } snaky_data_type;
 
 /**
@@ -187,6 +175,8 @@ SNAKY_API int snaky_shutdown(void);
 
   @param str The string to search.
   @param buffer Where to place the value of the found argument.
+  If this is NULL, then the function will only return
+  whether or not the argument was found.
   @param buffer_size The size of 'buffer' in bytes.
   @param arg_name The name of the argument to search for.
   @param out_start_pos A pointer to a const char*. If a valid pointer
