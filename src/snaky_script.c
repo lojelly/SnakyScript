@@ -7,7 +7,8 @@
 #include "dynamic_map_spellbook.h"
 #include "snaky_script.h"
 
-#define STRING_DELIM '"'
+#define GROUP_OPENING '{'
+#define GROUP_CLOSING '}'
 
 static bool init = false;
 
@@ -149,6 +150,28 @@ int snaky_shutdown()
 	return 1;
 }
 
+// start should point to the first group indicator in the group string
+static const char *find_end_of_group(const char *start)
+{
+	size_t depth = 0;
+
+	for(const char *p = start; *p; ++p)
+	{
+		if(*p == GROUP_OPENING)
+			depth++;
+		else if(*p == GROUP_CLOSING)
+		{
+			depth--;
+
+			// when the depth matches the starting depth, the end of the group is found
+			if(depth == 0)
+				return p;
+		}
+	}
+
+	return NULL;
+}
+
 static int resolve_data_type(const char **attribs_start, snaky_data_type *out_data_type)
 {
 	// default to invalid value
@@ -248,25 +271,29 @@ static int parse_target_attrib(const char *attribs_start, char *buffer, size_t b
 	if(out_start_pos)
 		*out_start_pos = attribs_start;
 
-	// see if the attrib value is a string
-	bool in_string = *attribs_start == STRING_DELIM;
-
 	// determine if a nested attribute or string is given
-	if(in_string)
+	if(*attribs_start == GROUP_OPENING)
 	{
-		const char *start_of_str = attribs_start;
-
-		// skip the string delimiter
-		attribs_start++;
+		const char *start_of_group = attribs_start;
 
 		// copy everything in the string exactly as is
+		const char *end_of_group = find_end_of_group(attribs_start);
+		if(!end_of_group)
+		{
+			vl_log(VL_ERROR, "Group was never closed in string: '%s'!\n", start_of_group);
+			return 0;
+		}
+
+		// skip the indicator
+		attribs_start++;
+
 		size_t i = 0;
-		while(buffer && buffer_size > 0 && *attribs_start && *attribs_start != STRING_DELIM && i + 1 < buffer_size)
+		while(buffer && buffer_size > 0 && *attribs_start && attribs_start != end_of_group && i + 1 < buffer_size)
 			buffer[i++] = *attribs_start++;
 
 		if(!*attribs_start)
 		{
-			vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_str);
+			vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_group);
 			return 0;
 		}
 
@@ -329,18 +356,26 @@ int snaky_parse_target_attrib(const char *str, char *buffer, size_t buffer_size,
 		// get char
 		char c = *p;
 
-		// if the first char is a string delimiter, skip the string entirely (unless user is searching for nested attribute )
-		if(c == STRING_DELIM)
+		// if the first char is a group indicator, skip the string entirely (unless user is searching for nested attribute )
+		if(*p == GROUP_OPENING)
 		{
-			const char *start_of_str = p;
+			const char *start_of_group = p;
 
-			// skip the first string delimiter
+			const char *end_of_group = find_end_of_group(p);
+			if(!end_of_group)
+			{
+				vl_log(VL_ERROR, "Group was never closed in string: '%s'!\n", start_of_group);
+				return 0;
+			}
+
+			// skip the indicator
 			p++;
 
-			// keep going until another '\"' is found
-			while(*p && *p != STRING_DELIM)
+			// if user included a '.' to find a nested attribute, search for that attribute now:
+			if(last_nested_attrib_pos > 0)
 			{
-				if(last_nested_attrib_pos > 0)
+				// search the entire current string region:
+				while(p != end_of_group)
 				{
 					const char *attribs_start = p + 1;
 
@@ -355,13 +390,14 @@ int snaky_parse_target_attrib(const char *str, char *buffer, size_t buffer_size,
 
 					if(strncmp(attribs_start, resolved_attrib_name, resolved_attrib_len) == 0)
 						return parse_target_attrib(attribs_start, buffer, buffer_size, resolved_attrib_name, resolved_attrib_len, out_start_pos, out_data_type);
+
+					++p;
 				}
-				++p;
 			}
 
 			if(!*p)
 			{
-				vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_str);
+				vl_log(VL_ERROR, "Unexpected termination of string: '%s'!\n", start_of_group);
 				return 0;
 			}
 
@@ -471,25 +507,29 @@ static int parse_attrib(const char *attribs_start, char *name_buffer, size_t nam
 	if(out_start_pos)
 		*out_start_pos = attribs_start;
 
-	// see if the attrib value is a string
-	bool in_string = *attribs_start == STRING_DELIM;
-
-	// if inside a string, keep adding values until the matching string delimiter is found
-	if(in_string)
+	// if inside a string, keep adding values until the matching group indicator is found
+	if(*attribs_start == GROUP_OPENING)
 	{
-		const char *start_of_str = attribs_start;
+		const char *start_of_group = attribs_start;
 
-		// skip the string delimiter
+		const char *end_of_group = find_end_of_group(attribs_start);
+		if(!end_of_group)
+		{
+			vl_log(VL_ERROR, "Group was never closed in string: '%s'!\n", start_of_group);
+			return 0;
+		}
+
+		// skip the first indicator
 		attribs_start++;
 
 		// copy everything in the string exactly as is
 		i = 0;
-		while(*attribs_start && *attribs_start != STRING_DELIM && i + 1 < value_buffer_size)
+		while(*attribs_start && attribs_start != end_of_group && i + 1 < value_buffer_size)
 			value_buffer[i++] = *attribs_start++;
 
 		if(!*attribs_start)
 		{
-			vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_str);
+			vl_log(VL_ERROR, "Unexpected termination of string: '%s'!\n", start_of_group);
 			return 0;
 		}
 
@@ -519,20 +559,27 @@ int snaky_parse_attrib(const char *str, char *name_buffer, size_t name_buffer_si
 		// get char
 		char c = *p;
 
-		// if the first char is a string delimiter, skip the string entirely
-		if(c == STRING_DELIM)
+		// if the first char is a group indicator, skip the string entirely
+		if(*p == GROUP_OPENING)
 		{
-			const char *start_of_str = p;
+			const char *start_of_group = p;
 
-			// skip the first string delimiter
+			const char *end_of_group = find_end_of_group(p);
+			if(!end_of_group)
+			{
+				vl_log(VL_ERROR, "Group was never closed in string: '%s'!\n", start_of_group);
+				return 0;
+			}
+
+			// skip the indicator
 			p++;
 
-			while(*p && *p != STRING_DELIM)
+			while(*p && p != end_of_group)
 				++p;
 
 			if(!*p)
 			{
-				vl_log(VL_ERROR, "Expected closing '\"' after string: '%s'!\n", start_of_str);
+				vl_log(VL_ERROR, "Unexpected termination of string: '%s'!\n", start_of_group);
 				return 0;
 			}
 
